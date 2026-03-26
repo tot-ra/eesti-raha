@@ -1,0 +1,222 @@
+:root {
+  --bg-a: #f2efe8;
+  --bg-b: #d7e7f6;
+  --panel: rgba(255, 255, 255, 0.84);
+  --ink: #111827;
+  --muted: #475569;
+  --line: rgba(15, 23, 42, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+  font-family: 'Avenir Next', 'Segoe UI', sans-serif;
+  color: var(--ink);
+}
+
+body {
+  background:
+    radial-gradient(circle at 10% 15%, rgba(255, 183, 3, 0.2), transparent 30%),
+    radial-gradient(circle at 90% 85%, rgba(58, 134, 255, 0.18), transparent 32%),
+    linear-gradient(160deg, var(--bg-a), var(--bg-b));
+}
+
+.app {
+  padding: 1rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.app-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  font-size: 1.1rem;
+}
+
+.hero {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 1rem 1.2rem;
+  backdrop-filter: blur(4px);
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(1.4rem, 2.3vw, 2rem);
+}
+
+.hero p {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 0.7rem;
+  margin: 0.9rem 0;
+}
+
+.control-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.75rem 0.9rem;
+}
+
+.control-card label,
+.control-card .label {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+
+.control-card select {
+  width: 100%;
+  margin-top: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  background: #fff;
+}
+
+.hint {
+  color: var(--muted);
+  margin-top: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.reset-btn {
+  margin-top: 0.55rem;
+  border: 1px solid #0f172a;
+  background: #fff;
+  color: #0f172a;
+  border-radius: 10px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+.chart-shell {
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 0.6rem;
+  overflow: hidden;
+}
+
+.chart-svg {
+  width: 100%;
+  height: min(78vh, 820px);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.65), rgba(245, 249, 255, 0.92));
+  cursor: grab;
+}
+
+.chart-svg:active {
+  cursor: grabbing;
+}
+
+.node-group {
+  cursor: pointer;
+}
+
+.node-rect {
+  transition: opacity 0.2s ease;
+}
+
+.node-group:hover .node-rect {
+  opacity: 0.88;
+}
+
+.node-label {
+  font-size: 12px;
+  font-weight: 600;
+  fill: #0f172a;
+  pointer-events: none;
+}
+
+.chart-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+  padding: 0.5rem 0.2rem 0;
+}
+
+.chart-empty {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.sources {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.9rem;
+  margin-top: 0.85rem;
+}
+
+.focus-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.9rem;
+  margin-top: 0.85rem;
+}
+
+.focus-panel h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
+.focus-panel p {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+}
+
+.focus-panel ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  columns: 2;
+  column-gap: 1.4rem;
+}
+
+.focus-panel li {
+  margin-bottom: 0.2rem;
+}
+
+.sources h2 {
+  margin-top: 0;
+}
+
+.sources a {
+  color: #0f3b8a;
+}
+
+@media (max-width: 980px) {
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-svg {
+    height: 68vh;
+  }
+
+  .node-label {
+    font-size: 11px;
+  }
+
+  .focus-panel ul {
+    columns: 1;
+  }
+}
