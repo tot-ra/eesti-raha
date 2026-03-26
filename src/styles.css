@@ -78,13 +78,31 @@ body {
   font-size: 0.9rem;
 }
 
-.control-card select {
-  width: 100%;
-  margin-top: 0.35rem;
+.year-strip {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  margin-top: 0.4rem;
+  padding-bottom: 0.15rem;
+}
+
+.year-chip {
+  flex: 0 0 auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.35rem 0.45rem;
   background: #fff;
+  color: #0f172a;
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.year-chip.is-active {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #fff;
 }
 
 .hint {
@@ -135,11 +153,25 @@ body {
   opacity: 0.88;
 }
 
+.node-line {
+  transition: opacity 0.2s ease;
+}
+
+.node-group:hover .node-line {
+  opacity: 0.88;
+}
+
 .node-label {
   font-size: 12px;
   font-weight: 600;
   fill: #0f172a;
   pointer-events: none;
+}
+
+.node-amount {
+  font-size: 11px;
+  font-weight: 500;
+  fill: #334155;
 }
 
 .chart-help {
@@ -195,6 +227,50 @@ body {
   margin-bottom: 0.2rem;
 }
 
+.expense-table-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.9rem;
+  margin-top: 0.85rem;
+}
+
+.expense-table-panel h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1rem;
+}
+
+.expense-table-panel p {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+}
+
+.expense-table-wrap {
+  overflow: auto;
+  max-height: 380px;
+}
+
+.expense-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.expense-table th,
+.expense-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.expense-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(255, 255, 255, 0.95);
+  z-index: 1;
+}
+
 .sources h2 {
   margin-top: 0;
 }
@@ -219,4 +295,5 @@ body {
   .focus-panel ul {
     columns: 1;
   }
+
 }
