@@ -30,6 +30,7 @@ interface SankeyLinkDatum extends SankeyLink<any, any> {
 }
 
 const formatMillions = format(',.1f');
+const MIN_NODE_HEIGHT_PX = 2;
 
 const groupColors: Record<string, string> = {
   'income-total': '#2f855a',
@@ -50,7 +51,11 @@ const groupColors: Record<string, string> = {
   culture: '#ffb703',
   education: '#3a86ff',
   'social-protection': '#d62828',
-  'other-expense': '#6b7280'
+  'other-expense': '#6b7280',
+  'mof-result-area': '#0f766e',
+  'mof-program': '#0369a1',
+  'mof-activity': '#1d4ed8',
+  'mof-institution': '#6d28d9'
 };
 
 function colorFor(group: string): string {
@@ -100,9 +105,10 @@ export function BudgetSankey({ nodes, links, onNodeClick, focusedNodeId, sortMod
 
     const sankeyGenerator = sankey<SankeyNodeDatum, SankeyLinkDatum>()
       .nodeId((d) => d.id)
-      .nodeWidth(20)
-      // Keep bars strictly value-driven without extra vertical gap distortion.
-      .nodePadding(0)
+      // Slightly narrower bars leave more horizontal room for category labels.
+      .nodeWidth(14)
+      // Keep bars nearly value-driven but ensure tiny visual gaps between adjacent categories.
+      .nodePadding(1)
       .extent([
         [16, 16],
         [width - 16, height - 16],
@@ -137,7 +143,7 @@ export function BudgetSankey({ nodes, links, onNodeClick, focusedNodeId, sortMod
     for (const node of sortedNodes) {
       const isBudgetNode = node.id === 'BUDGET';
       const isProcurementNode = node.source === 'RHR';
-      const heightPx = Math.max(isProcurementNode ? 2.2 : 0.6, (node.y1 ?? 0) - (node.y0 ?? 0));
+      const heightPx = Math.max(MIN_NODE_HEIGHT_PX, (node.y1 ?? 0) - (node.y0 ?? 0));
       const scaledHeight = heightPx * transform.k;
       const centerY = ((node.y0 ?? 0) + (node.y1 ?? 0)) / 2;
       const baseSize = clamp(6.5 + Math.log2(Math.max(1, scaledHeight)) * 1.8, 8, isBudgetNode ? 20 : 16);
@@ -203,8 +209,7 @@ export function BudgetSankey({ nodes, links, onNodeClick, focusedNodeId, sortMod
 
           {graph.nodes.map((node) => {
             const widthPx = Math.max(1, (node.x1 ?? 0) - (node.x0 ?? 0));
-            const isProcurementNode = node.source === 'RHR';
-            const heightPx = Math.max(isProcurementNode ? 2.2 : 0.6, (node.y1 ?? 0) - (node.y0 ?? 0));
+            const heightPx = Math.max(MIN_NODE_HEIGHT_PX, (node.y1 ?? 0) - (node.y0 ?? 0));
             const isTinyNode = heightPx < 3;
             const isFocused = focusedNodeId === node.id;
             const fill = colorFor(node.group);
@@ -216,7 +221,7 @@ export function BudgetSankey({ nodes, links, onNodeClick, focusedNodeId, sortMod
             const amountText = `${formatMillions(node.value ?? 0)} M EUR`;
             const nodeCenterX = ((node.x0 ?? 0) + (node.x1 ?? 0)) / 2;
             const textX =
-              isBudgetNode || isExpenseTotalNode ? nodeCenterX : (node.x0 ?? 0) + ((node.x0 ?? 0) < width / 2 ? widthPx + 6 : -6);
+              isBudgetNode || isExpenseTotalNode ? nodeCenterX : (node.x0 ?? 0) + ((node.x0 ?? 0) < width / 2 ? widthPx + 20 : -20);
             const textAnchor = isBudgetNode || isExpenseTotalNode ? 'middle' : (node.x0 ?? 0) < width / 2 ? 'start' : 'end';
             const centerY = ((node.y0 ?? 0) + (node.y1 ?? 0)) / 2;
             const labelFill = isExpenseTotalNode ? '#f8fafc' : '#0f172a';
@@ -232,7 +237,7 @@ export function BudgetSankey({ nodes, links, onNodeClick, focusedNodeId, sortMod
                     x2={node.x1}
                     y2={((node.y0 ?? 0) + (node.y1 ?? 0)) / 2}
                     stroke={fill}
-                    strokeWidth={Math.max(1.2, heightPx)}
+                    strokeWidth={Math.max(MIN_NODE_HEIGHT_PX, heightPx)}
                     strokeLinecap="round"
                     className="node-line"
                   />

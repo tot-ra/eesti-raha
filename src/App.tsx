@@ -172,7 +172,7 @@ export default function App() {
 
     if (!isExpenseNode(focusedNode)) {
       for (const node of activeData.nodes) {
-        if (node.side === 'expense' && node.depth > 0 && node.depth <= extraDepth) {
+        if (node.side === 'expense' && node.depth > 0 && (node.depth <= extraDepth || node.source === 'RHR')) {
           visible.add(node.id);
         }
       }
@@ -295,8 +295,8 @@ export default function App() {
       <header className="hero">
         <h1>Estonian Budget Flow MVP</h1>
         <p>
-          Interactive income-to-expense flow using Statistics Estonia data. Income on the left, expense branches on the right,
-          with click-to-focus expansion.
+          Interactive income-to-expense flow using official Estonian public finance data. Income on the left, expense branches on the
+          right, with click-to-focus expansion.
         </p>
       </header>
 
@@ -376,6 +376,9 @@ export default function App() {
           </div>
           <div>
             <strong>Sector:</strong> {activeData.meta.sector}
+          </div>
+          <div>
+            <strong>Method:</strong> {activeData.meta.methodology === 'mof-budget-law' ? 'MoF budget law (fallback)' : 'Statistics Estonia (RR055/RR056)'}
           </div>
           <div>
             <strong>Generated:</strong> {new Date(data.meta.generatedAt).toLocaleString()}

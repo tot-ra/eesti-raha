@@ -70,6 +70,7 @@ Important fixed nodes used across years:
 - Reads available years from RR056 metadata.
 - Keeps years `>= 2018`.
 - Fetches up to 8 newest years.
+- If RR056 does not yet include `2025`, adds a `2025` fallback year from Ministry of Finance budget-law XLSX.
 
 ### 2) Income construction
 
@@ -104,6 +105,16 @@ If procurement fetch/parse fails, script continues without procurement layer.
 ### 6) Fallback behavior
 
 If live API fetching fails completely, script writes a minimal fallback sample (single year, 2024).
+
+### 7) 2025 fallback behavior
+
+- Uses MoF source file `2025. aasta riigieelarve seadus.xlsx`.
+- Uses detailed MoF annex file for expenses:
+  - `2025. aasta riigieelarve seaduse lisa_detailsem kulude jaotus ... .xlsx`
+- Parses expense hierarchy as `Tulemusvaldkond -> Programm -> Programmi tegevus -> Asutus`.
+- Falls back to institution-level expense totals if detailed annex parsing is unavailable.
+- Marks year metadata as `methodology: "mof-budget-law"`.
+- This year is official data but not directly comparable with RR056 COFOG hierarchy.
 
 ## Frontend behavior (`src/App.tsx`)
 
@@ -192,6 +203,10 @@ npm run preview
 - Statistics Estonia API:
   - `https://andmed.stat.ee/api/v1/et/stat/RR055.PX`
   - `https://andmed.stat.ee/api/v1/et/stat/RR056.PX`
+- Ministry of Finance budget materials:
+  - `https://www.fin.ee/riigi-rahandus-ja-maksud/riigieelarve-ja-eelarvestrateegia/2025-riigieelarve`
+  - `https://www.fin.ee/sites/default/files/documents/2025-01/2025.%20aasta%20riigieelarve%20seadus.xlsx`
+  - `https://www.fin.ee/sites/default/files/documents/2025-01/2025.%20aasta%20riigieelarve%20seaduse%20lisa_detailsem%20kulude%20jaotus%20asutuste%2C%20majandusliku%20sisu%20ja%20liikide%20l%C3%B5ikes.xlsx`
 - Estonian Public Procurement Register (RHR) open data:
   - `https://riigihanked.riik.ee/rhr/api/public/v1/opendata`
 

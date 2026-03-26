@@ -1,8 +1,17 @@
 import { mkdir, writeFile } from 'node:fs/promises';
+import { strFromU8, unzipSync } from 'fflate';
 
 const API_BASE = 'https://andmed.stat.ee/api/v1/et/stat';
 const RHR_BASE = 'https://riigihanked.riik.ee/rhr/api/public/v1/opendata';
+const MOF_BUDGET_2025_URL = 'https://www.fin.ee/sites/default/files/documents/2025-01/2025.%20aasta%20riigieelarve%20seadus.xlsx';
+const MOF_BUDGET_2025_DETAIL_URL =
+  'https://www.fin.ee/sites/default/files/documents/2025-01/2025.%20aasta%20riigieelarve%20seaduse%20lisa_detailsem%20kulude%20jaotus%20asutuste%2C%20majandusliku%20sisu%20ja%20liikide%20l%C3%B5ikes.xlsx';
+const MOF_BUDGET_2025_INFO_URL = 'https://www.fin.ee/riigi-rahandus-ja-maksud/riigieelarve-ja-eelarvestrateegia/2025-riigieelarve';
 const OUTPUT_PATH = new URL('../public/data/estonia-budget-flow.json', import.meta.url);
+const PROCUREMENT_TOP_CONTRACTS_LIMIT = 1000;
+const PROCUREMENT_MIN_VALUE_M = 0.05;
+const PROCUREMENT_FUNCTION_BUDGET_SHARE = 0.8;
+const PROCUREMENT_TOP_CONTRACTS_PER_CPV = 25;
 
 /**
  * @typedef {{id:string,label:string,side:'income'|'expense'|'hub',group:string,depth:number,parentId:string|null,source:string}} FlowNode
@@ -78,6 +87,21 @@ function inferExpenseGroup(code, name) {
   return name.toLowerCase().includes('haridus') ? 'education' : 'other-expense';
 }
 
+function inferMofExpenseGroup(label) {
+  const lower = label.toLowerCase();
+  if (lower.includes('haridus') || lower.includes('noor')) return 'education';
+  if (lower.includes('tervis') || lower.includes('haig')) return 'health';
+  if (lower.includes('sotsiaal') || lower.includes('hoolekan')) return 'social-protection';
+  if (lower.includes('julgeolek') || lower.includes('kaitse') || lower.includes('riigikaitse')) return 'defence';
+  if (lower.includes('õigus') || lower.includes('politsei') || lower.includes('pääste')) return 'safety';
+  if (lower.includes('kliima') || lower.includes('keskkond') || lower.includes('elurikkus')) return 'environment';
+  if (lower.includes('elukeskkond') || lower.includes('elam')) return 'housing';
+  if (lower.includes('kultuur') || lower.includes('sport') || lower.includes('keel') || lower.includes('eestlus')) return 'culture';
+  if (lower.includes('majandus') || lower.includes('ettevõtl') || lower.includes('transport') || lower.includes('dig')) return 'economy';
+  if (lower.includes('riigivalitsem') || lower.includes('avalik')) return 'public-services';
+  return 'other-expense';
+}
+
 function decodeDimension(dataset, key) {
   const dimension = dataset.dimension[key];
   const category = dimension.category;
@@ -103,11 +127,342 @@ function decodeXmlEntities(input) {
     .replaceAll('&quot;', '"')
     .replaceAll('&apos;', "'")
     .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>');
+    .replaceAll('&gt;', '>')
+    .replaceAll('&#10;', '\n')
+    .replaceAll('&#13;', '\r')
+    .replaceAll(/&#x([0-9A-Fa-f]+);/g, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replaceAll(/&#([0-9]+);/g, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)));
 }
 
 function safeId(input) {
   return input.replaceAll(/[^A-Za-z0-9]+/g, '_').replaceAll(/^_+|_+$/g, '').slice(0, 64) || 'x';
+}
+
+function parseSheetRowsFromXlsxBuffer(buffer, preferredSheetPattern) {
+  const zip = unzipSync(new Uint8Array(buffer));
+  const readZipText = (path) => {
+    const bytes = zip[path];
+    if (!bytes) throw new Error(`Missing file in XLSX archive: ${path}`);
+    return strFromU8(bytes);
+  };
+
+  const sharedStringsXml = zip['xl/sharedStrings.xml'] ? readZipText('xl/sharedStrings.xml') : '';
+  const sharedStrings = [];
+  for (const siMatch of sharedStringsXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)) {
+    const siXml = siMatch[1] ?? '';
+    const text = [...siXml.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((m) => decodeXmlEntities(m[1] ?? '')).join('');
+    sharedStrings.push(text);
+  }
+
+  const workbookXml = readZipText('xl/workbook.xml');
+  const relsXml = readZipText('xl/_rels/workbook.xml.rels');
+  const relById = new Map();
+  for (const relMatch of relsXml.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+    relById.set(relMatch[1], relMatch[2]);
+  }
+
+  const sheets = [];
+  for (const sheetMatch of workbookXml.matchAll(/<sheet\b[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"/g)) {
+    const name = decodeXmlEntities(sheetMatch[1] ?? '');
+    const relId = sheetMatch[2] ?? '';
+    const target = relById.get(relId);
+    if (!target) continue;
+    sheets.push({ name, path: target.startsWith('xl/') ? target : `xl/${target}` });
+  }
+
+  const selectedSheet =
+    sheets.find((sheet) => preferredSheetPattern.test(sheet.name)) ??
+    sheets[0] ??
+    null;
+  if (!selectedSheet) throw new Error('No worksheet found in XLSX.');
+
+  const worksheetXml = readZipText(selectedSheet.path);
+  const rows = [];
+  for (const rowMatch of worksheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+    const rowXml = rowMatch[1] ?? '';
+    const row = [];
+    for (const cellMatch of rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>|<c\b([^>]*)\/>/g)) {
+      const attrText = cellMatch[1] ?? cellMatch[3] ?? '';
+      const body = cellMatch[2] ?? '';
+      const ref = attrText.match(/\br="([A-Z]+)(\d+)"/)?.[1] ?? '';
+      if (!ref) continue;
+
+      let col = 0;
+      for (const ch of ref) col = col * 26 + (ch.charCodeAt(0) - 64);
+      const index = col - 1;
+      const type = attrText.match(/\bt="([^"]+)"/)?.[1] ?? '';
+
+      let value = '';
+      if (type === 's') {
+        const sharedIndex = Number(body.match(/<v>([\s\S]*?)<\/v>/)?.[1] ?? -1);
+        value = sharedStrings[sharedIndex] ?? '';
+      } else if (type === 'inlineStr') {
+        value = decodeXmlEntities(body.match(/<t\b[^>]*>([\s\S]*?)<\/t>/)?.[1] ?? '');
+      } else {
+        value = decodeXmlEntities(body.match(/<v>([\s\S]*?)<\/v>/)?.[1] ?? '');
+      }
+      row[index] = value.trim();
+    }
+    if (row.some((cell) => cell && String(cell).trim())) rows.push(row);
+  }
+  return rows;
+}
+
+function parseBudget2025FromMofSheet(rows) {
+  const getRowLabelAndAmount = (row) => {
+    const values = Array.from({ length: row.length }, (_, index) => String(row[index] ?? '').trim());
+    const labelIndex = values.findIndex((value) => value.length > 0 && Number.isNaN(Number(value)));
+    if (labelIndex < 0) return { label: '', amount: null, values };
+    const label = values[labelIndex];
+    let amount = null;
+    for (let i = labelIndex + 1; i < values.length; i += 1) {
+      const value = values[i];
+      if (!value) continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        amount = parsed;
+        break;
+      }
+    }
+    return { label, amount, values };
+  };
+
+  let topIncomeRows = [];
+  let expenseTotal = null;
+  let section = 'none';
+  const institutionExpenses = new Map();
+  let currentInstitution = null;
+
+  for (const row of rows) {
+    const { label, amount, values } = getRowLabelAndAmount(row);
+    const hasAmount = Number.isFinite(amount);
+    const hasEelarveKokku = values.includes('Eelarve kokku');
+
+    if (label.includes('(2) Vahendite liigendus')) {
+      section = 'institutions';
+      continue;
+    }
+
+    if (section !== 'institutions') {
+      if (label === 'TULUD') {
+        section = 'top-income';
+        continue;
+      }
+      if (label === 'KULUD' && hasAmount) {
+        expenseTotal = Math.abs(amount) / 1000;
+        section = 'top-expense';
+        continue;
+      }
+      if (section === 'top-income' && hasAmount && amount > 0 && !/^sh\b/i.test(label)) {
+        topIncomeRows.push({ label, valueM: amount / 1000 });
+      }
+      continue;
+    }
+
+    if (hasEelarveKokku && label !== 'KULUD' && label !== 'TULUD') {
+      currentInstitution = label;
+      continue;
+    }
+
+    if (currentInstitution && label === 'KULUD' && hasAmount && amount < 0) {
+      institutionExpenses.set(currentInstitution, Math.abs(amount) / 1000);
+    }
+  }
+
+  topIncomeRows = topIncomeRows
+    .filter((row) => row.valueM > 0.01 && row.label !== 'TULUD')
+    .sort((a, b) => b.valueM - a.valueM);
+
+  if (!expenseTotal || !topIncomeRows.length || !institutionExpenses.size) {
+    throw new Error('Could not parse 2025 budget rows from MoF XLSX.');
+  }
+
+  const institutions = [...institutionExpenses.entries()]
+    .filter(([, value]) => value > 0.01)
+    .map(([label, valueM]) => ({ label, valueM }))
+    .sort((a, b) => b.valueM - a.valueM);
+
+  const topInstitutions = institutions.slice(0, 40);
+  const otherInstitutionSum = institutions.slice(40).reduce((sum, row) => sum + row.valueM, 0);
+  if (otherInstitutionSum > 0.01) topInstitutions.push({ label: 'Other institutions', valueM: otherInstitutionSum });
+
+  return {
+    incomeRows: topIncomeRows,
+    expenseTotal,
+    institutionRows: topInstitutions
+  };
+}
+
+function parseBudget2025DetailHierarchy(rows) {
+  const nodes = [];
+  const created = new Set();
+  const linkValues = new Map();
+  const topLevelTotals = new Map();
+  const labelCache = new Map();
+
+  const addNode = ({ id, label, depth, parentId, group }) => {
+    if (created.has(id)) return;
+    created.add(id);
+    nodes.push({ id, label, side: 'expense', group, depth, parentId, source: 'MoF' });
+    labelCache.set(id, label);
+  };
+
+  const addLink = (source, target, value) => {
+    if (!Number.isFinite(value) || value <= 0) return;
+    const key = `${source}->${target}`;
+    linkValues.set(key, (linkValues.get(key) ?? 0) + value);
+  };
+
+  let currentFieldId = null;
+  let currentFieldGroup = 'other-expense';
+  let currentProgramId = null;
+  let currentActivityId = null;
+
+  for (const row of rows) {
+    const kind = String(row[0] ?? '').trim();
+    const label = String(row[1] ?? '').trim();
+    const amount = Number(row[2]);
+    if (!label || !Number.isFinite(amount) || amount >= -0.01) continue;
+    const valueM = Math.abs(amount) / 1000;
+    if (valueM < 0.05) continue;
+
+    if (kind === 'Tulemusvaldkond') {
+      currentFieldId = `EXP_MOF_TV_${safeId(label)}`;
+      currentFieldGroup = inferMofExpenseGroup(label);
+      currentProgramId = null;
+      currentActivityId = null;
+      addNode({ id: currentFieldId, label, depth: 1, parentId: 'EXP_TOTAL', group: currentFieldGroup });
+      addLink('EXP_TOTAL', currentFieldId, valueM);
+      topLevelTotals.set(currentFieldId, (topLevelTotals.get(currentFieldId) ?? 0) + valueM);
+      continue;
+    }
+
+    if (kind === 'Programm' && currentFieldId) {
+      currentProgramId = `${currentFieldId}__P_${safeId(label)}`;
+      currentActivityId = null;
+      addNode({ id: currentProgramId, label, depth: 2, parentId: currentFieldId, group: currentFieldGroup });
+      addLink(currentFieldId, currentProgramId, valueM);
+      continue;
+    }
+
+    if (kind === 'Programmi tegevus' && currentProgramId) {
+      currentActivityId = `${currentProgramId}__A_${safeId(label)}`;
+      addNode({ id: currentActivityId, label, depth: 3, parentId: currentProgramId, group: currentFieldGroup });
+      addLink(currentProgramId, currentActivityId, valueM);
+      continue;
+    }
+
+    if (kind === 'Asutus') {
+      const parentId = currentActivityId ?? currentProgramId ?? currentFieldId;
+      if (!parentId) continue;
+      const institutionId = `${parentId}__I_${safeId(label)}`;
+      addNode({ id: institutionId, label, depth: 4, parentId, group: currentFieldGroup });
+      addLink(parentId, institutionId, valueM);
+    }
+  }
+
+  const links = [...linkValues.entries()].map(([key, value]) => {
+    const [source, target] = key.split('->');
+    return {
+      source,
+      target,
+      value: Number(value.toFixed(1)),
+      kind: 'expense',
+      sourceRef: 'MoF 2025 detailed budget annex XLSX'
+    };
+  });
+
+  const total = Number([...topLevelTotals.values()].reduce((sum, value) => sum + value, 0).toFixed(1));
+  return { nodes, links, total };
+}
+
+async function fetchMofBudget2025Graph() {
+  const [baseRes, detailRes] = await Promise.all([fetch(MOF_BUDGET_2025_URL), fetch(MOF_BUDGET_2025_DETAIL_URL)]);
+  if (!baseRes.ok) throw new Error(`Failed to fetch MoF 2025 XLSX: HTTP ${baseRes.status}`);
+  const rows = parseSheetRowsFromXlsxBuffer(await baseRes.arrayBuffer(), /III lugemise järgne seadusepilt/i);
+  const parsed = parseBudget2025FromMofSheet(rows);
+
+  const nodes = [
+    { id: 'INC_TOTAL', label: 'Income Total', side: 'income', group: 'income-total', depth: 0, parentId: null, source: 'MoF' },
+    { id: 'BUDGET', label: 'Estonia Government Budget (2025)', side: 'hub', group: 'hub', depth: 0, parentId: null, source: 'MoF' },
+    { id: 'EXP_TOTAL', label: 'Expenses Total', side: 'expense', group: 'expense-total', depth: 0, parentId: null, source: 'MoF' }
+  ];
+  const links = [];
+
+  const incomeTotal = Number(parsed.incomeRows.reduce((sum, row) => sum + row.valueM, 0).toFixed(1));
+  for (const row of parsed.incomeRows.slice(0, 14)) {
+    const nodeId = `INC_MOF_${safeId(row.label)}`;
+    nodes.push({
+      id: nodeId,
+      label: row.label,
+      side: 'income',
+      group: inferIncomeGroup(row.label),
+      depth: 1,
+      parentId: 'INC_TOTAL',
+      source: 'MoF'
+    });
+    links.push({ source: nodeId, target: 'INC_TOTAL', value: Number(row.valueM.toFixed(1)), kind: 'income', sourceRef: 'MoF 2025 budget law XLSX' });
+  }
+  links.push({ source: 'INC_TOTAL', target: 'BUDGET', value: incomeTotal, kind: 'income', sourceRef: 'MoF 2025 budget law XLSX' });
+
+  let expenseTotalForBudgetLink = parsed.expenseTotal;
+  if (detailRes.ok) {
+    try {
+      const detailRows = parseSheetRowsFromXlsxBuffer(await detailRes.arrayBuffer(), /Seaduse lisa/i);
+      const detail = parseBudget2025DetailHierarchy(detailRows);
+      nodes.push(...detail.nodes);
+      links.push(...detail.links);
+      if (detail.total > 0) expenseTotalForBudgetLink = detail.total;
+    } catch (error) {
+      console.warn(`Detailed 2025 MoF hierarchy unavailable, using institution-only fallback: ${error}`);
+    }
+  }
+
+  if (!links.some((link) => link.source === 'EXP_TOTAL' && link.target !== 'BUDGET')) {
+    const institutionSum = parsed.institutionRows.reduce((sum, row) => sum + row.valueM, 0);
+    const scale = institutionSum > 0 ? parsed.expenseTotal / institutionSum : 1;
+    for (const row of parsed.institutionRows) {
+      const nodeId = `EXP_INST_${safeId(row.label)}`;
+      nodes.push({
+        id: nodeId,
+        label: row.label,
+        side: 'expense',
+        group: inferMofExpenseGroup(row.label),
+        depth: 1,
+        parentId: 'EXP_TOTAL',
+        source: 'MoF'
+      });
+      links.push({
+        source: 'EXP_TOTAL',
+        target: nodeId,
+        value: Number((row.valueM * scale).toFixed(1)),
+        kind: 'expense',
+        sourceRef: 'MoF 2025 budget law XLSX'
+      });
+    }
+  }
+
+  links.push({
+    source: 'BUDGET',
+    target: 'EXP_TOTAL',
+    value: Number(expenseTotalForBudgetLink.toFixed(1)),
+    kind: 'expense',
+    sourceRef: 'MoF 2025 budget law XLSX'
+  });
+
+  return {
+    meta: {
+      generatedAt: new Date().toISOString(),
+      datasetYear: '2025',
+      sector: 'State budget (Ministry of Finance)',
+      methodology: 'mof-budget-law',
+      notes:
+        'Fallback year built from Ministry of Finance 2025 budget-law XLSX with detailed annex hierarchy (result area -> program -> activity -> institution). Not directly comparable with RR056 COFOG hierarchy.',
+      sources: [MOF_BUDGET_2025_INFO_URL, MOF_BUDGET_2025_URL, MOF_BUDGET_2025_DETAIL_URL]
+    },
+    nodes,
+    links
+  };
 }
 
 function pickIncomeRows(rows) {
@@ -164,7 +519,7 @@ function pickContractTitle(names, institutionName) {
 
 function buildContractRecord({ amountEur, cpv, institutionName, title }) {
   const amountM = toMillions(amountEur / 1_000_000);
-  if (!amountM || amountM < 0.2) return null;
+  if (!amountM || amountM < PROCUREMENT_MIN_VALUE_M) return null;
   const functionCode = mapCpvToFunction(cpv);
   return {
     functionCode,
@@ -250,7 +605,7 @@ async function fetchProcurementContracts(year) {
   }
 
   return {
-    contracts: contracts.sort((a, b) => b.amountM - a.amountM).slice(0, 180),
+    contracts: contracts.sort((a, b) => b.amountM - a.amountM).slice(0, PROCUREMENT_TOP_CONTRACTS_LIMIT),
     sources: sourceUrls
   };
 }
@@ -468,7 +823,7 @@ async function fetchYearGraph(year, rr055Config, rr056Config) {
 
     const remainingByFunction = new Map();
     for (const [functionNodeId, budgetValue] of topFunctionBudgets.entries()) {
-      remainingByFunction.set(functionNodeId, budgetValue * 0.2);
+      remainingByFunction.set(functionNodeId, budgetValue * PROCUREMENT_FUNCTION_BUDGET_SHARE);
     }
 
     const accepted = [];
@@ -477,7 +832,7 @@ async function fetchYearGraph(year, rr055Config, rr056Config) {
       const remaining = remainingByFunction.get(functionNodeId) ?? 0;
       if (remaining <= 0) continue;
       const usedValue = Math.min(contract.amountM, remaining);
-      if (usedValue < 0.2) continue;
+      if (usedValue < PROCUREMENT_MIN_VALUE_M) continue;
       remainingByFunction.set(functionNodeId, remaining - usedValue);
       accepted.push({ ...contract, usedValue, functionNodeId });
     }
@@ -591,7 +946,7 @@ async function fetchYearGraph(year, rr055Config, rr056Config) {
             sourceRef: 'RHR open data'
           });
 
-          const topContracts = cpvRows.sort((a, b) => b.usedValue - a.usedValue).slice(0, 4);
+          const topContracts = cpvRows.sort((a, b) => b.usedValue - a.usedValue).slice(0, PROCUREMENT_TOP_CONTRACTS_PER_CPV);
           for (const contract of topContracts) {
             const contractId = `${cpvId}__C_${safeId(contract.title)}_${safeId(contract.cpv)}`;
             if (!createdExpenseNodes.has(contractId)) {
@@ -627,6 +982,7 @@ async function fetchYearGraph(year, rr055Config, rr056Config) {
       generatedAt: new Date().toISOString(),
       datasetYear: year,
       sector: rr056Config.sectorLabel,
+      methodology: 'stats-ee-cofog',
       notes: 'Live data from Statistics Estonia API with deep function/indicator/subsector breakdown plus procurement and institution/program enrichment from RHR open-data. Values in million EUR.',
       sources: [
         'https://andmed.stat.ee/api/v1/et/stat/RR055.PX',
@@ -697,13 +1053,24 @@ async function fetchLiveDataBundle() {
     console.log(`Fetched ${year}`);
   }
 
+  if (!yearsMap['2025']) {
+    try {
+      yearsMap['2025'] = await fetchMofBudget2025Graph();
+      availableYears.unshift('2025');
+      while (availableYears.length > 8) availableYears.pop();
+      console.log('Fetched 2025 (MoF fallback)');
+    } catch (error) {
+      console.warn(`MoF 2025 fallback unavailable: ${error}`);
+    }
+  }
+
   return {
     meta: {
       generatedAt: new Date().toISOString(),
       sector: sectorLabel,
       availableYears,
-      notes: 'Multi-year budget flow bundle from Statistics Estonia API.',
-      sources: ['https://andmed.stat.ee/api/v1/et/stat/RR055.PX', 'https://andmed.stat.ee/api/v1/et/stat/RR056.PX']
+      notes: 'Multi-year budget flow bundle from Statistics Estonia API, with optional 2025 Ministry of Finance fallback.',
+      sources: ['https://andmed.stat.ee/api/v1/et/stat/RR055.PX', 'https://andmed.stat.ee/api/v1/et/stat/RR056.PX', MOF_BUDGET_2025_INFO_URL]
     },
     availableYears,
     years: yearsMap

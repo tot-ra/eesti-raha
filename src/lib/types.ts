@@ -23,6 +23,7 @@ export interface BudgetFlowData {
     generatedAt: string;
     datasetYear: string;
     sector: string;
+    methodology?: 'stats-ee-cofog' | 'mof-budget-law';
     notes: string;
     sources: string[];
   };
