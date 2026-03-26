@@ -1,4 +1,4 @@
-# Eesti Raha: Estonian Budget Flow MVP
+# Eesti Raha: Estonian Budget Flow
 
 Interactive Sankey visualization of Estonia's public budget flows, built with React + TypeScript + D3.
 
@@ -9,6 +9,9 @@ It shows:
 - optional procurement/institution/program/contract drill-down from RHR open data.
 
 All values are in **million EUR**.
+
+<img width="1419" height="974" alt="Screenshot 2026-03-26 at 14 06 43" src="https://github.com/user-attachments/assets/0d5b8181-80f1-49f6-b09c-a58a61ce7c04" />
+
 
 ## What this project contains
 
